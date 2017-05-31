@@ -2,14 +2,28 @@
 
 #include <time.h>
 
-struct Tick {};
-struct Quote
-{
+struct Tick {
+	enum {
+		Quote = 0,
+		Trade = 1
+	};
+	int _type;
 	char _symbol[12];
-	unsigned _price[2];
-	unsigned _size[2];
 	timespec _ts;
 };
+
+struct Quote: public Tick
+{
+	unsigned _price[2];
+	unsigned _size[2];
+};
+
+struct Trade : public Tick
+{
+	unsigned _price;
+	unsigned _size;
+};
+
 #include "ExecutionReport.h"
 #include "OrderBook.h"
 #include "TimeManager.h"
@@ -24,11 +38,6 @@ struct ExecutionReportCallback
 class ExchangeSimulator: public TimeEventObject
 {
 protected:
-	uint64_t _delayNanoseconds;
-	Intrusive::LinkedList _pendingOrderList;
-	Intrusive::LinkedObjectPool<BookOrder> _bookOrderAllocator;
-	Intrusive::LinkedObjectPool<PriceLevel> _priceLevelAllocator;
-
 	struct BookOrderEqual
 	{
 		bool operator() (uint64_t clOrdId, const BookOrder &bookOrder) const
@@ -36,7 +45,6 @@ protected:
 			return clOrdId == bookOrder._orderId;
 		}
 	};
-	Intrusive::HashTable<uint64_t, BookOrder, BookOrderEqual> _bookOrderTable;
 
 	struct OrderBookEqual
 	{
@@ -45,7 +53,14 @@ protected:
 			return !strcmp(symbol, orderBook.symbol());
 		}
 	};
+
+	uint64_t _delayNanoseconds;
+	Intrusive::LinkedList _pendingOrderList;
+	Intrusive::LinkedObjectPool<BookOrder> _bookOrderAllocator;
+	Intrusive::LinkedObjectPool<PriceLevel> _priceLevelAllocator;
+
 	Intrusive::HashTable<const char*, OrderBook, OrderBookEqual> _orderBookTable;
+	Intrusive::HashTable<uint64_t, BookOrder, BookOrderEqual> _bookOrderTable;
 
 	ExecutionReportCallback *_executionReportCallback;
 	TimeManager *_timeManager;
@@ -59,6 +74,7 @@ public:
 	void onTick(const Tick &tick);
 	void onQuote(const Quote &quote);
 	void onOrder(Order *order);
+	void onTrade(const Trade &trade);
 	void timeEvent(const timespec &ts);
 	void execute(int side, unsigned price, unsigned shares, BookOrder *bookOrder);
 

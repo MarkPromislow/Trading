@@ -25,8 +25,7 @@ timespec addTime(const timespec &ts, uint64_t nanoseconds)
 
 uint64_t timespecToNanoseconds(const timespec &ts)
 {
-	// TODO fix this
-	return ts.tv_sec * 1000000000 + ts.tv_nsec;
+	return (ts.tv_sec % 604800) * 1000000000 + ts.tv_nsec;
 }
 
 bool less(const timespec &l, const timespec &r)
@@ -48,7 +47,7 @@ void ExchangeSimulator::execute(int side, unsigned price, unsigned shares, BookO
 {
 	bookOrder->_shares -= shares;
 	Order *order;
-	if ((order == bookOrder->_order))
+	if ((order = bookOrder->_order))
 	{
 		ExecutionReport executionReport;
 		executionReport._clOrdId = order->clOrdId();
@@ -56,12 +55,12 @@ void ExchangeSimulator::execute(int side, unsigned price, unsigned shares, BookO
 		executionReport._lastPx = price;
 		executionReport._lastQty = shares;
 		executionReport._side = order->side();
-		executionReport._execType = FIX::ExecType::FILL;
+		executionReport._execType = FIX::ExecType::Trade;
 		if (bookOrder->_shares)
-			executionReport._ordStatus = FIX::OrdStatus::PARTIALLY_FILLED;
+			executionReport._ordStatus = FIX::OrdStatus::PartiallyFilled;
 		else
 		{
-			executionReport._ordStatus = FIX::OrdStatus::FILLED;
+			executionReport._ordStatus = FIX::OrdStatus::Filled;
 			bookOrder->removeFromHash();
 		}
 		executionReport._transactTime = timespecToNanoseconds(_timeManager->time());
@@ -132,7 +131,7 @@ void ExchangeSimulator::timeEvent(const timespec &ts)
 
 		switch (order->msgType())
 		{
-			case FIX::MsgType::NEW_ORDER:
+			case FIX::MsgType::NewOrder:
 			{
 				if (!(orderBook = _orderBookTable.find(symbol)))
 				{
@@ -146,18 +145,18 @@ void ExchangeSimulator::timeEvent(const timespec &ts)
 				{
 					char text[32];
 					snprintf(text, sizeof(text), "clOrdId %I64u: not unique", order->clOrdId());
-					status(FIX::ExecType::REJECTED, FIX::OrdStatus::REJECTED, text, order);
+					status(FIX::ExecType::Rejected, FIX::OrdStatus::Rejected, text, order);
 					break;
 				}
 
 				if (!orderBook->newOrder(order->sideId(), order->price(), bookOrder))
 				{
 					if (!bookOrder->_shares)
-						status(FIX::ExecType::NEW, FIX::OrdStatus::NEW, "", order);
+						status(FIX::ExecType::New, FIX::OrdStatus::New, "", order);
 				}
 				break;
 			}
-			case FIX::MsgType::CANCEL_REQUEST:
+			case FIX::MsgType::CancelRequest:
 			{
 				BookOrder *originalBookOrder;
 				uint64_t origClOrdId = order->origClOrdId();
@@ -165,7 +164,7 @@ void ExchangeSimulator::timeEvent(const timespec &ts)
 				{
 					char buffer[32];
 					snprintf(buffer, sizeof(buffer), "origClOrdId %I64u unknown", origClOrdId);
-					status(FIX::ExecType::REJECTED, FIX::OrdStatus::REJECTED, buffer, order);
+					status(FIX::ExecType::Rejected, FIX::OrdStatus::Rejected, buffer, order);
 					break;
 				}
 				originalBookOrder->removeFromHash();
@@ -173,7 +172,7 @@ void ExchangeSimulator::timeEvent(const timespec &ts)
 				originalOrderBook->cancelRequest(order->sideId(), originalBookOrder);
 				break;
 			}
-			case FIX::MsgType::REPLACE_REQUEST:
+			case FIX::MsgType::ReplaceRequest:
 			{
 				BookOrder *originalBookOrder;
 				uint64_t origClOrdId = order->origClOrdId();
@@ -181,7 +180,7 @@ void ExchangeSimulator::timeEvent(const timespec &ts)
 				{
 					char buffer[32];
 					snprintf(buffer, sizeof(buffer), "origClOrdId %I64u unknown", origClOrdId);
-					status(FIX::ExecType::REJECTED, FIX::OrdStatus::REJECTED, buffer, order);
+					status(FIX::ExecType::Rejected, FIX::OrdStatus::Rejected, buffer, order);
 					break;
 				}
 
@@ -190,7 +189,7 @@ void ExchangeSimulator::timeEvent(const timespec &ts)
 				{
 					char text[32];
 					snprintf(text, sizeof(text), "clOrdId %I64u: not unique", order->clOrdId());
-					status(FIX::ExecType::REJECTED, FIX::OrdStatus::REJECTED, text, order);
+					status(FIX::ExecType::Rejected, FIX::OrdStatus::Rejected, text, order);
 					break;
 				}
 
@@ -199,10 +198,10 @@ void ExchangeSimulator::timeEvent(const timespec &ts)
 				if (!originalOrderBook->replaceRequest(order->sideId(), order->price(), bookOrder, originalBookOrder))
 				{
 					if (originalBookOrder->_shares == bookOrder->_shares)
-						status(FIX::ExecType::REPLACE, FIX::OrdStatus::REPLACED, "", order);
+						status(FIX::ExecType::Replaced, FIX::OrdStatus::Replaced, "", order);
 				}
 			}
-			case FIX::MsgType::STATUS_REQUEST:
+			case FIX::MsgType::StatusRequest:
 			{
 				BookOrder *originalBookOrder;
 				uint64_t origClOrdId = order->origClOrdId();
@@ -210,16 +209,16 @@ void ExchangeSimulator::timeEvent(const timespec &ts)
 				{
 					char buffer[32];
 					snprintf(buffer, sizeof(buffer), "origClOrdId %I64u unknown", origClOrdId);
-					status(FIX::ExecType::REJECTED, FIX::OrdStatus::REJECTED, buffer, order);
+					status(FIX::ExecType::Rejected, FIX::OrdStatus::Rejected, buffer, order);
 					break;
 				}
-				if(originalBookOrder->_shares == order->orderQty()) status(FIX::ExecType::NEW, FIX::OrdStatus::NEW, "", order);
-				else status(FIX::ExecType::PARTIAL_FILL, FIX::OrdStatus::PARTIALLY_FILLED, "", order);
+				if(originalBookOrder->_shares == order->orderQty()) status(FIX::ExecType::New, FIX::OrdStatus::New, "", order);
+				else status(FIX::ExecType::Trade, FIX::OrdStatus::PartiallyFilled, "", order);
 				break;
 			}
 			default:
 			{
-				status(FIX::ExecType::REJECTED, FIX::OrdStatus::REJECTED, "unhandled MsgType", order);
+				status(FIX::ExecType::Rejected, FIX::OrdStatus::Rejected, "unhandled MsgType", order);
 				break;
 			}
 		}
@@ -268,9 +267,28 @@ void ExchangeSimulator::onQuote(const Quote & quote)
 	}
 }
 
-void ExchangeSimulator::onTick(const Tick & tick)
+void ExchangeSimulator::onTrade(const Trade &trade)
 {
+
 }
 
-
-
+void ExchangeSimulator::onTick(const Tick &tick)
+{
+	_timeManager->setTime(tick._ts);
+	switch (tick._type)
+	{
+	case Tick::Quote:
+	{
+		onQuote(static_cast<const Quote&>(tick));
+		break;
+	}
+	case Tick::Trade:
+	{
+		onTrade(static_cast<const Trade&>(tick));
+		break;
+	}
+	default:
+		printf("%s %s %d: unhandled tick type: %d\n", __FILE__, __FUNCTION__, __LINE__, tick._type);
+		break;
+	}
+}

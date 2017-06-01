@@ -7,6 +7,7 @@
 #include "ExchangeSimulator.h"
 #include "FixExecType.h"
 #include "FixMsgType.h"
+#include "FixSide.h"
 #include "FixOrdStatus.h"
 
 #include "Order.h"
@@ -36,9 +37,13 @@ bool less(const timespec &l, const timespec &r)
 char *StrCpy(char *output, const char *input, size_t outputSize)
 {
 	char *o = output - 1;
-	const char *end = input + outputSize - 2;
-	for (char c = *input; c && input < end; c = *++input)
-		*++o = c;
+	if (input)
+	{
+		const char *end = input + outputSize - 2;
+		for (char c = *input; c && input < end; c = *++input)
+			*++o = c;
+	}
+	*++o = 0;
 	return output;
 }
 } // namespace
@@ -57,7 +62,9 @@ void ExchangeSimulator::execute(int side, unsigned price, unsigned shares, BookO
 		executionReport._side = order->side();
 		executionReport._execType = FIX::ExecType::Trade;
 		if (bookOrder->_shares)
+		{
 			executionReport._ordStatus = FIX::OrdStatus::PartiallyFilled;
+		}
 		else
 		{
 			executionReport._ordStatus = FIX::OrdStatus::Filled;
@@ -85,8 +92,7 @@ void ExchangeSimulator::status(char execType, char ordStatus, const char * text,
 	executionReport._execType = execType;
 	executionReport._ordStatus = ordStatus;
 	executionReport._transactTime = timespecToNanoseconds(_timeManager->time());
-	*executionReport._text = 0;
-	if(text) StrCpy(executionReport._text, text, sizeof(executionReport._text));
+	StrCpy(executionReport._text, text, sizeof(executionReport._text));
 
 	if (_executionReportCallback) _executionReportCallback->onExecution(executionReport);
 }
@@ -135,58 +141,57 @@ void ExchangeSimulator::timeEvent(const timespec &ts)
 			{
 				if (!(orderBook = _orderBookTable.find(symbol)))
 				{
-					orderBook = new OrderBook();
-					orderBook->initialize(this, symbol);
+					orderBook = new OrderBook(this, symbol);
 					_orderBookTable.insert(symbol, orderBook);
 				}
 
 				// add order to book
 				if (_bookOrderTable.insert(order->clOrdId(), bookOrder))
 				{
+					// reject
 					char text[32];
 					snprintf(text, sizeof(text), "clOrdId %I64u: not unique", order->clOrdId());
 					status(FIX::ExecType::Rejected, FIX::OrdStatus::Rejected, text, order);
 					break;
 				}
 
-				if (!orderBook->newOrder(order->sideId(), order->price(), bookOrder))
+				if (!orderBook->newOrder(FIX::Side::sideId(order->side()), order->price(), bookOrder))
 				{
-					if (!bookOrder->_shares)
-						status(FIX::ExecType::New, FIX::OrdStatus::New, "", order);
+					status(FIX::ExecType::New, FIX::OrdStatus::New, "", order);
 				}
 				break;
 			}
 			case FIX::MsgType::CancelRequest:
 			{
 				BookOrder *originalBookOrder;
-				uint64_t origClOrdId = order->origClOrdId();
-				if (!(originalBookOrder = _bookOrderTable.find(origClOrdId)))
+				if (!(originalBookOrder = _bookOrderTable.find(order->origClOrdId())))
 				{
-					char buffer[32];
-					snprintf(buffer, sizeof(buffer), "origClOrdId %I64u unknown", origClOrdId);
-					status(FIX::ExecType::Rejected, FIX::OrdStatus::Rejected, buffer, order);
+					// reject
+					char text[32];
+					snprintf(text, sizeof(text), "origClOrdId %I64u unknown", order->origClOrdId());
+					status(FIX::ExecType::Rejected, FIX::OrdStatus::Rejected, text, order);
 					break;
 				}
 				originalBookOrder->removeFromHash();
 				OrderBook *originalOrderBook = originalBookOrder->_priceLevel->orderBook();
-				originalOrderBook->cancelRequest(order->sideId(), originalBookOrder);
+				originalOrderBook->cancelRequest(FIX::Side::sideId(order->side()), originalBookOrder);
 				break;
 			}
 			case FIX::MsgType::ReplaceRequest:
 			{
 				BookOrder *originalBookOrder;
-				uint64_t origClOrdId = order->origClOrdId();
-				if (!(originalBookOrder = _bookOrderTable.find(origClOrdId)))
+				if (!(originalBookOrder = _bookOrderTable.find(order->origClOrdId())))
 				{
-					char buffer[32];
-					snprintf(buffer, sizeof(buffer), "origClOrdId %I64u unknown", origClOrdId);
-					status(FIX::ExecType::Rejected, FIX::OrdStatus::Rejected, buffer, order);
+					char text[32];
+					snprintf(text, sizeof(text), "origClOrdId %I64u unknown", order->origClOrdId());
+					status(FIX::ExecType::Rejected, FIX::OrdStatus::Rejected, text, order);
 					break;
 				}
 
 				// add to orderbook
 				if (_bookOrderTable.insert(order->clOrdId(), bookOrder))
 				{
+					// reject
 					char text[32];
 					snprintf(text, sizeof(text), "clOrdId %I64u: not unique", order->clOrdId());
 					status(FIX::ExecType::Rejected, FIX::OrdStatus::Rejected, text, order);
@@ -197,19 +202,18 @@ void ExchangeSimulator::timeEvent(const timespec &ts)
 				OrderBook *originalOrderBook = originalBookOrder->_priceLevel->orderBook();
 				if (!originalOrderBook->replaceRequest(order->sideId(), order->price(), bookOrder, originalBookOrder))
 				{
-					if (originalBookOrder->_shares == bookOrder->_shares)
-						status(FIX::ExecType::Replaced, FIX::OrdStatus::Replaced, "", order);
+					status(FIX::ExecType::Replaced, FIX::OrdStatus::Replaced, "", order);
 				}
+				break;
 			}
 			case FIX::MsgType::StatusRequest:
 			{
 				BookOrder *originalBookOrder;
-				uint64_t origClOrdId = order->origClOrdId();
-				if (!(originalBookOrder = _bookOrderTable.find(origClOrdId)))
+				if (!(originalBookOrder = _bookOrderTable.find(order->origClOrdId())))
 				{
-					char buffer[32];
-					snprintf(buffer, sizeof(buffer), "origClOrdId %I64u unknown", origClOrdId);
-					status(FIX::ExecType::Rejected, FIX::OrdStatus::Rejected, buffer, order);
+					char text[32];
+					snprintf(text, sizeof(text), "origClOrdId %I64u unknown", order->origClOrdId());
+					status(FIX::ExecType::Rejected, FIX::OrdStatus::Rejected, text, order);
 					break;
 				}
 				if(originalBookOrder->_shares == order->orderQty()) status(FIX::ExecType::New, FIX::OrdStatus::New, "", order);
@@ -236,8 +240,7 @@ void ExchangeSimulator::onQuote(const Quote & quote)
 		OrderBook *orderBook;
 		if (!(orderBook = _orderBookTable.find(quote._symbol)))
 		{
-			orderBook = new OrderBook();
-			orderBook->initialize(this, quote._symbol);
+			orderBook = new OrderBook(this, quote._symbol);
 			_orderBookTable.insert(orderBook->symbol(), orderBook);
 			orderBook->newOrder(0, quote._price[0], bidOrder);
 			orderBook->newOrder(1, quote._price[1], askOrder);

@@ -1,5 +1,3 @@
-#pragma once
-
 #include "TickHistory.h"
 
 void QuoteDataBucket::addDuration(int64_t duration, const void *data)

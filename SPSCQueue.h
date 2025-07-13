@@ -1,0 +1,46 @@
+#pragma once
+#include <atomic>
+#include <cmath>
+#include <vector>
+
+template <typename T>
+class SPSCQueue
+{
+private:
+	std::vector<T> m_buffer;
+	unsigned m_capacity;
+	unsigned m_mask;
+	unsigned m_writeIdx{ 0 };
+	unsigned m_nextWriteIdx{ 0 };
+	std::atomic<unsigned> m_aWriteIdx{ 0 };
+	alignas(64) std::atomic<unsigned> m_aReadIdx{ 0 };
+	unsigned m_readIdx{ 0 };
+public:
+	SPSCQueue(unsigned capacity): m_capacity(std::pow(2, ceil(log2(capacity)))), m_mask(m_capacity-1)
+	{
+		m_buffer.resize(m_capacity);
+	}
+
+	T* back()
+	{
+		m_nextWriteIdx = (m_writeIdx + 1) & m_mask;
+		return m_nextWriteIdx != m_aReadIdx.load(std::memory_order_relaxed) ? &m_buffer[m_writeIdx] : nullptr;
+	}
+
+	void push_back()
+	{
+		m_writeIdx = m_nextWriteIdx;
+		m_aWriteIdx.store(m_nextWriteIdx, std::memory_order_release);
+	}
+
+	T* front()
+	{
+		return m_readIdx != m_aWriteIdx.load(std::memory_order_acquire) ? &m_buffer[m_readIdx] : nullptr;
+	}
+
+	void pop_front()
+	{
+		m_readIdx = (m_readIdx + 1) & m_mask;
+		m_aReadIdx.store(m_readIdx, std::memory_order_relaxed);
+	}
+};

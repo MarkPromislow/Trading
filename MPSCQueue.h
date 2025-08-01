@@ -11,9 +11,9 @@ private:
 	unsigned m_capacity;
 	unsigned m_mask;
 	unsigned m_nextWriteIdx{ 0 };
-	std::atomic<unsigned> m_aNextWriteIdx{ 0 };
-	unsigned m_writeIdx{ 0 };
 	std::atomic<unsigned> m_aWriteIdx{ 0 };
+	std::atomic<unsigned> m_aWrite{ 0 };
+	std::atomic<unsigned> m_aNextWrite{ 0 };
 	alignas(64) std::atomic<unsigned> m_aReadIdx{ 0 };
 	unsigned m_readIdx{ 0 };
 public:
@@ -24,16 +24,19 @@ public:
 
 	bool write(T& t)
 	{
-		unsigned currentWriteIdx;
+		unsigned write;
+		unsigned nextWrite;
 		unsigned nextWriteIdx;
 		do
 		{
-			currentWriteIdx = m_aWriteIdx.load(std::memory_order_relaxed);
-			nextWriteIdx = (currentWriteIdx + 1) & m_mask;
+			write = m_aWrite.load(std::memory_order_relaxed);
+			nextWrite = (write + 1);
+			nextWriteIdx = nextWrite & m_mask;
 			if (nextWriteIdx == m_aReadIdx.load(std::memory_order_relaxed)) return false;
-		} while (!m_aNextWriteIdx.compare_exchange_weak(currentWriteIdx, nextWriteIdx, std::memory_order_relaxed));
-		m_buffer[currentWriteIdx] = t;
+		} while (!m_aNextWrite.compare_exchange_weak(write, nextWrite, std::memory_order_relaxed, std::memory_order_relaxed));
+		m_buffer[write & m_mask] = t;
 		m_aWriteIdx.store(nextWriteIdx, std::memory_order_release);
+		m_aWrite.store(nextWrite, std::memory_order_relaxed);
 		return true;
 	}
 
